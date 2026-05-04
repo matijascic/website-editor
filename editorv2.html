@@ -484,6 +484,7 @@
         .format-btn.active {
             background: var(--accent);
             color: white;
+            transform: scale(1.05);
         }
 
         .format-btn.highlight-btn {
@@ -720,7 +721,7 @@
             <button class="format-btn" data-format="bold" title="Bold (Ctrl+B)"><b>B</b></button>
             <button class="format-btn" data-format="italic" title="Italic (Ctrl+I)"><i>I</i></button>
             <button class="format-btn" data-format="underline" title="Underline (Ctrl+U)"><u>U</u></button>
-            <button class="format-btn highlight-btn" data-format="highlight" title="Highlight">A</button>
+            <button class="format-btn highlight-btn" data-format="highlight" title="Highlight (Ctrl+H)">A</button>
           `;
 
                         // handle format button clicks
@@ -730,33 +731,13 @@
                                 const format = btn.dataset.format;
 
                                 if (format === 'highlight') {
-                                    // check if already highlighted and toggle
-                                    const selection = window.getSelection();
-                                    if (selection.rangeCount > 0) {
-                                        const range = selection.getRangeAt(0);
-                                        const container = range.commonAncestorContainer;
-                                        const element = container.nodeType === 3 ? container.parentElement : container;
-
-                                        // check if current selection has highlight
-                                        const currentColor = window.getComputedStyle(element).backgroundColor;
-                                        const isHighlighted = element.style.backgroundColor === 'rgb(254, 240, 138)' ||
-                                            element.style.backgroundColor === '#fef08a' ||
-                                            currentColor === 'rgb(254, 240, 138)';
-
-                                        if (isHighlighted) {
-                                            // remove highlight
-                                            document.execCommand('removeFormat', false, null);
-                                            document.execCommand('backColor', false, 'transparent');
-                                        } else {
-                                            // add highlight
-                                            document.execCommand('backColor', false, '#fef08a');
-                                        }
-                                    }
+                                    toggleHighlight(el);
                                 } else {
                                     document.execCommand(format, false, null);
                                 }
 
                                 block.text = htmlToText(el.innerHTML);
+                                updateFormatButtonStates(wrap);
                             });
                         });
 
@@ -782,6 +763,19 @@
                 blocksEl.appendChild(insertZoneEnd);
             }
 
+            // update format button states on selection change
+            document.addEventListener('selectionchange', () => {
+                const sel = window.getSelection();
+                if (!sel || !sel.rangeCount) return;
+                const node = sel.getRangeAt(0).startContainer;
+                const el = node.nodeType === 1 ? node : node.parentElement;
+                if (!el) return;
+                const wrap = el.closest('.block-wrap');
+                if (wrap && wrap.querySelector('[contenteditable="true"]')) {
+                    updateFormatButtonStates(wrap);
+                }
+            });
+
             // convert plain text with \n to html with <br>, preserving formatting tags
             function textToHtml(text) {
                 if (!text) return '';
@@ -799,6 +793,7 @@
             // convert contenteditable html back to text, preserving formatting tags
             function htmlToText(html) {
                 return html
+                    .replace(/\u200B/g, '')
                     .replace(/<div><br><\/div>/gi, '\n')
                     .replace(/<div>/gi, '\n')
                     .replace(/<\/div>/gi, '')
@@ -1052,6 +1047,153 @@
             // ---------- keyboard handling ----------
             let slashMenuOpen = false;
 
+            // check if a node is inside a yellow-highlighted span
+            function findHighlightAncestor(node, root) {
+                let n = node;
+                while (n && n !== root) {
+                    if (n.nodeType === 1 && n.style && (
+                        n.style.backgroundColor === 'rgb(254, 240, 138)' ||
+                        n.style.backgroundColor === '#fef08a' ||
+                        n.style.backgroundColor === 'yellow'
+                    )) return n;
+                    n = n.parentNode;
+                }
+                return null;
+            }
+
+            // unwrap a span (move children out, remove span)
+            function unwrapSpan(span) {
+                const parent = span.parentNode;
+                while (span.firstChild) parent.insertBefore(span.firstChild, span);
+                parent.removeChild(span);
+            }
+
+            // toggle highlight on the current selection (or for next typing if collapsed)
+            function toggleHighlight(rootEl) {
+                const sel = window.getSelection();
+                if (!sel.rangeCount) return;
+                const range = sel.getRangeAt(0);
+
+                // determine if we're currently in a highlight
+                const startNode = range.startContainer;
+                const endNode = range.endContainer;
+                const startHL = findHighlightAncestor(startNode, rootEl);
+
+                if (sel.isCollapsed) {
+                    // cursor only - if inside highlight, split out so next typing isn't highlighted
+                    if (startHL) {
+                        // split the highlight span at the cursor
+                        const after = range.cloneRange();
+                        after.setEndAfter(startHL);
+                        const tail = after.extractContents();
+                        // insert tail right after the original highlight span
+                        startHL.parentNode.insertBefore(tail, startHL.nextSibling);
+
+                        // insert a zero-width text node OUTSIDE the highlight to anchor caret
+                        // (otherwise browser inherits the highlight style for next typing)
+                        const anchor = document.createTextNode('\u200B');
+                        startHL.parentNode.insertBefore(anchor, startHL.nextSibling);
+
+                        // place caret inside that anchor text node
+                        const caret = document.createRange();
+                        caret.setStart(anchor, 1);
+                        caret.collapse(true);
+                        sel.removeAllRanges();
+                        sel.addRange(caret);
+
+                        // drop any empty highlight spans created by the split
+                        [startHL, anchor.nextSibling].forEach(n => {
+                            if (n && n.nodeType === 1 && n.textContent === '' &&
+                                findHighlightAncestor(n, rootEl) === n) {
+                                n.parentNode.removeChild(n);
+                            }
+                        });
+                    } else {
+                        // not in highlight - create an empty highlight span with a zero-width
+                        // anchor inside, so the button reflects active state immediately and
+                        // typing continues the highlight
+                        const span = document.createElement('span');
+                        span.style.backgroundColor = '#fef08a';
+                        span.appendChild(document.createTextNode('\u200B'));
+                        range.insertNode(span);
+                        const caret = document.createRange();
+                        caret.setStart(span.firstChild, 1);
+                        caret.collapse(true);
+                        sel.removeAllRanges();
+                        sel.addRange(caret);
+                    }
+                    return;
+                }
+
+                // non-collapsed selection
+                const endHL = findHighlightAncestor(endNode, rootEl);
+                if (startHL || endHL) {
+                    // remove highlights intersecting the selection
+                    // collect all highlight spans inside rootEl that intersect range
+                    const spans = Array.from(rootEl.querySelectorAll('span')).filter(s =>
+                        (s.style.backgroundColor === 'rgb(254, 240, 138)' ||
+                            s.style.backgroundColor === '#fef08a' ||
+                            s.style.backgroundColor === 'yellow') &&
+                        range.intersectsNode(s)
+                    );
+                    if (startHL && !spans.includes(startHL)) spans.push(startHL);
+                    if (endHL && !spans.includes(endHL)) spans.push(endHL);
+
+                    // save selection markers
+                    const startMark = document.createElement('span');
+                    startMark.dataset.mark = 'start';
+                    const endMark = document.createElement('span');
+                    endMark.dataset.mark = 'end';
+                    const r2 = range.cloneRange();
+                    r2.collapse(false);
+                    r2.insertNode(endMark);
+                    const r1 = range.cloneRange();
+                    r1.collapse(true);
+                    r1.insertNode(startMark);
+
+                    spans.forEach(unwrapSpan);
+
+                    // restore selection between markers
+                    const newRange = document.createRange();
+                    newRange.setStartAfter(startMark);
+                    newRange.setEndBefore(endMark);
+                    sel.removeAllRanges();
+                    sel.addRange(newRange);
+                    startMark.parentNode.removeChild(startMark);
+                    endMark.parentNode.removeChild(endMark);
+                    // normalize to merge text nodes
+                    rootEl.normalize();
+                } else {
+                    document.execCommand('backColor', false, '#fef08a');
+                }
+            }
+
+            // update format button states to show active formatting
+            function updateFormatButtonStates(wrap) {
+                if (!wrap) return;
+                const toolbar = wrap.querySelector('.format-toolbar');
+                if (!toolbar) return;
+
+                const sel = window.getSelection();
+                if (!sel.rangeCount) return;
+
+                toolbar.querySelectorAll('.format-btn').forEach(btn => {
+                    const format = btn.dataset.format;
+                    let isActive = false;
+
+                    if (format === 'highlight') {
+                        // Check the actual DOM for a highlight ancestor
+                        const range = sel.getRangeAt(0);
+                        const wrapEl = wrap.querySelector('[contenteditable="true"]');
+                        isActive = !!findHighlightAncestor(range.startContainer, wrapEl);
+                    } else {
+                        isActive = document.queryCommandState(format);
+                    }
+
+                    btn.classList.toggle('active', isActive);
+                });
+            }
+
             function handleBlockKeydown(e, i, el) {
                 // when the slash menu is open, it owns all input — prevent the block from receiving anything
                 if (slashMenuOpen) {
@@ -1063,18 +1205,32 @@
                     e.preventDefault();
                     document.execCommand('bold');
                     state.blocks[i].text = htmlToText(el.innerHTML);
+                    const wrap = el.closest('.block-wrap');
+                    updateFormatButtonStates(wrap);
                     return;
                 }
                 if ((e.ctrlKey || e.metaKey) && e.key === 'i') {
                     e.preventDefault();
                     document.execCommand('italic');
                     state.blocks[i].text = htmlToText(el.innerHTML);
+                    const wrap = el.closest('.block-wrap');
+                    updateFormatButtonStates(wrap);
                     return;
                 }
                 if ((e.ctrlKey || e.metaKey) && e.key === 'u') {
                     e.preventDefault();
                     document.execCommand('underline');
                     state.blocks[i].text = htmlToText(el.innerHTML);
+                    const wrap = el.closest('.block-wrap');
+                    updateFormatButtonStates(wrap);
+                    return;
+                }
+                if ((e.ctrlKey || e.metaKey) && e.key === 'h') {
+                    e.preventDefault();
+                    toggleHighlight(el);
+                    state.blocks[i].text = htmlToText(el.innerHTML);
+                    const wrap = el.closest('.block-wrap');
+                    updateFormatButtonStates(wrap);
                     return;
                 }
                 // ctrl+enter creates a new paragraph block below
@@ -1337,25 +1493,40 @@
             // ---------- serialize blocks → markdown ----------
             function htmlToMarkdown(html) {
                 if (!html) return '';
-                return html
-                    // convert formatting tags to markdown
-                    .replace(/<b>(.*?)<\/b>/gi, '**$1**')
-                    .replace(/<strong>(.*?)<\/strong>/gi, '**$1**')
-                    .replace(/<i>(.*?)<\/i>/gi, '*$1*')
-                    .replace(/<em>(.*?)<\/em>/gi, '*$1*')
-                    .replace(/<u>(.*?)<\/u>/gi, '<u>$1</u>') // markdown doesn't have underline, keep HTML
-                    // convert highlights - use == syntax for markdown
-                    .replace(/<span[^>]*background-color:\s*(?:rgb\(254,\s*240,\s*138\)|#fef08a)[^>]*>(.*?)<\/span>/gi, '==$1==')
-                    .replace(/<span[^>]*background-color:\s*[^>]*>(.*?)<\/span>/gi, '==$1==')
-                    // clean up line breaks
-                    .replace(/<br\s*\/?>/gi, '\n')
-                    // remove any remaining tags
-                    .replace(/<[^>]+>/g, '')
-                    // decode entities
+                let s = html;
+
+                // highlights first (must run before generic span stripping)
+                s = s.replace(/<span[^>]*background-color:\s*(?:rgb\(254,\s*240,\s*138\)|#fef08a|yellow)[^>]*>([\s\S]*?)<\/span>/gi, '<mark>$1</mark>');
+
+                // bold: <b>, <strong>, span with font-weight bold/700+
+                s = s.replace(/<(b|strong)\b[^>]*>([\s\S]*?)<\/\1>/gi, '<strong>$2</strong>');
+                s = s.replace(/<span[^>]*font-weight:\s*(?:bold|[6-9]\d{2})[^>]*>([\s\S]*?)<\/span>/gi, '<strong>$1</strong>');
+
+                // italic: <i>, <em>, span with font-style: italic
+                s = s.replace(/<(i|em)\b[^>]*>([\s\S]*?)<\/\1>/gi, '<em>$2</em>');
+                s = s.replace(/<span[^>]*font-style:\s*italic[^>]*>([\s\S]*?)<\/span>/gi, '<em>$1</em>');
+
+                // underline: <u>, span with text-decoration: underline
+                s = s.replace(/<u\b[^>]*>([\s\S]*?)<\/u>/gi, '<u>$1</u>');
+                s = s.replace(/<span[^>]*text-decoration[^:]*:\s*[^;">]*underline[^>]*>([\s\S]*?)<\/span>/gi, '<u>$1</u>');
+
+                // any remaining spans / fonts: keep their inner content
+                s = s.replace(/<\/?(?:span|font)\b[^>]*>/gi, '');
+
+                // line breaks
+                s = s.replace(/<br\s*\/?>/gi, '\n');
+
+                // strip anything else we don't recognize, but preserve mark/strong/em/u
+                s = s.replace(/<(?!\/?(?:mark|strong|em|u)\b)[^>]+>/gi, '');
+
+                // decode entities
+                s = s
                     .replace(/&nbsp;/g, ' ')
                     .replace(/&lt;/g, '<')
                     .replace(/&gt;/g, '>')
                     .replace(/&amp;/g, '&');
+
+                return s;
             }
 
             function serialize() {
