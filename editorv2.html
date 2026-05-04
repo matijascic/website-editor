@@ -506,12 +506,65 @@
             background: #fde047;
         }
 
+        /* post picker modal */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.4);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 200;
+        }
+
+        .modal-overlay.show {
+            display: flex;
+        }
+
+        .modal {
+            background: var(--surface);
+            border-radius: 10px;
+            padding: 1.25rem;
+            min-width: 360px;
+            max-width: 90vw;
+            max-height: 70vh;
+            overflow-y: auto;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+        }
+
+        .modal h3 {
+            margin: 0 0 0.75rem 0;
+            font-size: 1rem;
+        }
+
+        .post-item {
+            padding: 0.55rem 0.75rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            transition: background 0.1s;
+        }
+
+        .post-item:hover {
+            background: rgba(37, 99, 235, 0.08);
+        }
+
+        .modal-close {
+            margin-top: 0.75rem;
+            display: flex;
+            justify-content: flex-end;
+        }
+
         .actions {
             margin-top: 1.5rem;
             display: flex;
             gap: 0.5rem;
             justify-content: flex-end;
             transition: opacity 0.2s;
+        }
+
+        .actions .spacer {
+            margin-right: auto;
         }
 
         .actions.disabled {
@@ -604,12 +657,24 @@
         <div class="blocks" id="blocks"></div>
 
         <div class="actions" id="actions">
+            <button class="btn spacer" id="reset">reset</button>
+            <button class="btn" id="load-post">load post</button>
             <button class="btn" id="save-draft">save draft</button>
             <button class="btn btn-primary" id="save">save to _posts/</button>
         </div>
     </div>
 
     <div class="toast" id="toast"></div>
+
+    <div class="modal-overlay" id="post-picker">
+        <div class="modal">
+            <h3>load post</h3>
+            <div id="post-list"></div>
+            <div class="modal-close">
+                <button class="btn" id="post-picker-close">cancel</button>
+            </div>
+        </div>
+    </div>
 
     <script>
         (function () {
@@ -1534,53 +1599,144 @@
                 let i = 0;
                 while (i < state.blocks.length) {
                     const block = state.blocks[i];
+                    // each block is wrapped in HTML comment markers so we can parse it back
+                    // unambiguously. markdown processors ignore comments.
+                    const open = `<!-- block:${block.type} -->`;
+                    const close = `<!-- /block -->`;
+                    let body;
                     switch (block.type) {
                         case 'h2':
-                            out.push(`## ${htmlToMarkdown(block.text)}`);
+                            body = `## ${htmlToMarkdown(block.text)}`;
                             i++;
                             break;
                         case 'h3':
-                            out.push(`### ${htmlToMarkdown(block.text)}`);
+                            body = `### ${htmlToMarkdown(block.text)}`;
                             i++;
                             break;
                         case 'quote':
-                            // each line of the block becomes its own > line
-                            out.push(htmlToMarkdown(block.text).split('\n').map(l => `> ${l}`).join('\n'));
+                            body = htmlToMarkdown(block.text).split('\n').map(l => `> ${l}`).join('\n');
                             i++;
                             break;
                         case 'code':
-                            out.push('```\n' + block.text + '\n```');
+                            body = '```\n' + block.text + '\n```';
                             i++;
                             break;
-                        case 'image':
+                        case 'image': {
                             const imgMarkdown = `![${block.alt || block.title || ''}](${block.src || ''})`;
-                            if (block.title) {
-                                out.push(imgMarkdown + '\n*' + block.title + '*');
-                            } else {
-                                out.push(imgMarkdown);
-                            }
+                            body = block.title ? imgMarkdown + '\n*' + block.title + '*' : imgMarkdown;
                             i++;
                             break;
+                        }
                         case 'hr':
-                            out.push('---');
+                            body = '---';
                             i++;
                             break;
-                        case 'list':
-                            // group consecutive list blocks into one markdown list
+                        case 'list': {
+                            // group consecutive list blocks into one markdown list, but emit
+                            // a separate marker per item so each round-trips into its own block
                             const items = [];
                             while (i < state.blocks.length && state.blocks[i].type === 'list') {
-                                items.push(`- ${htmlToMarkdown(state.blocks[i].text)}`);
+                                items.push(`<!-- block:list -->\n- ${htmlToMarkdown(state.blocks[i].text)}\n<!-- /block -->`);
                                 i++;
                             }
                             out.push(items.join('\n'));
-                            break;
+                            continue;
+                        }
                         case 'paragraph':
                         default:
-                            out.push(htmlToMarkdown(block.text));
+                            body = htmlToMarkdown(block.text);
                             i++;
                     }
+                    out.push(`${open}\n${body}\n${close}`);
                 }
                 return out.join('\n\n');
+            }
+
+            // ---------- parse markdown back into blocks ----------
+            function parseMarkdown(md) {
+                // strip frontmatter
+                let body = md;
+                let frontMatter = '';
+                const fmMatch = md.match(/^---\n([\s\S]*?)\n---\n?/);
+                if (fmMatch) {
+                    frontMatter = fmMatch[1];
+                    body = md.slice(fmMatch[0].length);
+                }
+
+                const blocks = [];
+                // match each block:type ... /block segment
+                const re = /<!--\s*block:(\w+)\s*-->\n?([\s\S]*?)\n?<!--\s*\/block\s*-->/g;
+                let m;
+                while ((m = re.exec(body)) !== null) {
+                    const type = m[1];
+                    const content = m[2];
+                    blocks.push(blockFromMarkdown(type, content));
+                }
+
+                // if no markers found, fall back to a single paragraph with the whole body
+                if (blocks.length === 0 && body.trim()) {
+                    blocks.push({ id: nid(), type: 'paragraph', text: body.trim() });
+                }
+                if (blocks.length === 0) {
+                    blocks.push({ id: nid(), type: 'paragraph', text: '' });
+                }
+                return { frontMatter, blocks };
+            }
+
+            function blockFromMarkdown(type, content) {
+                const block = { id: nid(), type };
+                switch (type) {
+                    case 'h2':
+                        block.text = content.replace(/^##\s*/, '');
+                        break;
+                    case 'h3':
+                        block.text = content.replace(/^###\s*/, '');
+                        break;
+                    case 'quote':
+                        block.text = content.split('\n').map(l => l.replace(/^>\s?/, '')).join('\n');
+                        break;
+                    case 'code':
+                        block.text = content.replace(/^```\w*\n?/, '').replace(/\n?```$/, '');
+                        break;
+                    case 'image': {
+                        const imgMatch = content.match(/!\[([^\]]*)\]\(([^)]+)\)/);
+                        block.src = imgMatch ? imgMatch[2] : '';
+                        block.alt = imgMatch ? imgMatch[1] : '';
+                        const titleMatch = content.match(/\n\*([^*]+)\*\s*$/);
+                        block.title = titleMatch ? titleMatch[1] : '';
+                        block.text = '';
+                        break;
+                    }
+                    case 'hr':
+                        block.text = '';
+                        break;
+                    case 'list':
+                        block.text = content.replace(/^-\s*/, '');
+                        break;
+                    case 'paragraph':
+                    default:
+                        block.text = content;
+                        block.type = 'paragraph';
+                }
+                return block;
+            }
+
+            // parse "title: ...", "date: ...", "tags: [...]" out of frontmatter
+            function parseFrontMatter(fm) {
+                const out = { title: '', date: '', tags: '' };
+                fm.split('\n').forEach(line => {
+                    const titleM = line.match(/^title:\s*"?([^"]*)"?$/);
+                    if (titleM) { out.title = titleM[1]; return; }
+                    const dateM = line.match(/^date:\s*(.+)$/);
+                    if (dateM) {
+                        // convert "YYYY-MM-DD HH:MM:SS" → "YYYY-MM-DDTHH:MM:SS" for input[type=datetime-local]
+                        out.date = dateM[1].trim().replace(' ', 'T');
+                        return;
+                    }
+                    const tagsM = line.match(/^tags:\s*\[([^\]]*)\]$/);
+                    if (tagsM) { out.tags = tagsM[1].split(',').map(s => s.trim()).filter(Boolean).join(', '); return; }
+                });
+                return out;
             }
 
             function buildFrontMatter() {
@@ -1635,6 +1791,11 @@
             const draftBanner = document.getElementById('draft-banner');
             const loadDraftBtn = document.getElementById('load-draft-btn');
             const dismissDraftBtn = document.getElementById('dismiss-draft-btn');
+            const loadPostBtn = document.getElementById('load-post');
+            const resetBtn = document.getElementById('reset');
+            const postPicker = document.getElementById('post-picker');
+            const postList = document.getElementById('post-list');
+            const postPickerClose = document.getElementById('post-picker-close');
 
             function openDB() {
                 return new Promise((res, rej) => {
@@ -1770,6 +1931,77 @@
             }
 
             saveDraftBtn.addEventListener('click', saveDraft);
+
+            // ---------- load post ----------
+            async function openPostPicker() {
+                if (!repoHandle) {
+                    showToast('connect a repo first', true);
+                    return;
+                }
+                if (!(await ensurePerm(repoHandle))) {
+                    showToast('permission denied', true);
+                    return;
+                }
+                postList.innerHTML = '';
+                try {
+                    const postsDir = await repoHandle.getDirectoryHandle('_posts', { create: false });
+                    const files = [];
+                    for await (const entry of postsDir.values()) {
+                        if (entry.kind === 'file' && entry.name.endsWith('.md')) {
+                            files.push(entry);
+                        }
+                    }
+                    files.sort((a, b) => b.name.localeCompare(a.name));
+                    if (files.length === 0) {
+                        postList.innerHTML = '<div style="color:var(--muted);font-size:0.85rem;">no posts found in _posts/</div>';
+                    } else {
+                        files.forEach(entry => {
+                            const item = document.createElement('div');
+                            item.className = 'post-item';
+                            item.textContent = entry.name;
+                            item.onclick = () => loadPost(entry);
+                            postList.appendChild(item);
+                        });
+                    }
+                    postPicker.classList.add('show');
+                } catch (err) {
+                    showToast('failed to list posts: ' + err.message, true);
+                }
+            }
+
+            async function loadPost(fileHandle) {
+                try {
+                    const file = await fileHandle.getFile();
+                    const text = await file.text();
+                    const { frontMatter, blocks } = parseMarkdown(text);
+                    const fm = parseFrontMatter(frontMatter);
+                    document.getElementById('title').value = fm.title;
+                    document.getElementById('date').value = fm.date;
+                    document.getElementById('tags').value = fm.tags;
+                    state.blocks = blocks.length ? blocks : [{ id: nid(), type: 'paragraph', text: '' }];
+                    render();
+                    postPicker.classList.remove('show');
+                    showToast(`loaded ${fileHandle.name}`);
+                } catch (err) {
+                    showToast('failed to load: ' + err.message, true);
+                }
+            }
+
+            loadPostBtn.addEventListener('click', openPostPicker);
+
+            resetBtn.addEventListener('click', () => {
+                if (!confirm('clear the editor? unsaved changes will be lost.')) return;
+                document.getElementById('title').value = '';
+                document.getElementById('date').value = '';
+                document.getElementById('tags').value = '';
+                state.blocks = [{ id: nid(), type: 'paragraph', text: '' }];
+                render();
+                showToast('editor cleared');
+            });
+            postPickerClose.addEventListener('click', () => postPicker.classList.remove('show'));
+            postPicker.addEventListener('click', (e) => {
+                if (e.target === postPicker) postPicker.classList.remove('show');
+            });
 
             connectBtn.addEventListener('click', pickRepo);
 
