@@ -191,6 +191,28 @@
             pointer-events: none;
         }
 
+        /* text formatting styles */
+        .block b,
+        .block strong {
+            font-weight: 700;
+        }
+
+        .block i,
+        .block em {
+            font-style: italic;
+        }
+
+        .block u {
+            text-decoration: underline;
+        }
+
+        .block [style*="background-color: rgb(254, 240, 138)"],
+        .block [style*="background-color:#fef08a"] {
+            background-color: #fef08a !important;
+            padding: 0.1em 0.2em;
+            border-radius: 2px;
+        }
+
         .block.h2 {
             font-size: 1.5rem;
             font-weight: 600;
@@ -414,6 +436,75 @@
             color: var(--muted);
         }
 
+        /* formatting toolbar */
+        .format-toolbar {
+            position: absolute;
+            top: 0rem;
+            right: -8.5rem;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+            padding: 0.25rem;
+            display: flex;
+            gap: 0.15rem;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.15s;
+        }
+
+        .block-wrap:focus-within .format-toolbar {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .format-btn {
+            width: 26px;
+            height: 26px;
+            border: none;
+            background: transparent;
+            color: var(--text);
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            transition: all 0.1s;
+        }
+
+        .format-btn:hover {
+            background: var(--accent);
+            color: white;
+            transform: scale(1.05);
+        }
+
+        .format-btn.active {
+            background: var(--accent);
+            color: white;
+        }
+
+        .format-btn.highlight-btn {
+            position: relative;
+        }
+
+        .format-btn.highlight-btn::after {
+            content: '';
+            position: absolute;
+            bottom: 3px;
+            left: 4px;
+            right: 4px;
+            height: 3px;
+            background: #fef08a;
+            border-radius: 2px;
+        }
+
+        .format-btn.highlight-btn.active::after {
+            background: #fde047;
+        }
+
         .actions {
             margin-top: 1.5rem;
             display: flex;
@@ -621,6 +712,57 @@
                     controls.querySelector('[data-act="del"]').onclick = () => deleteBlock(i);
                     wrap.appendChild(controls);
 
+                    // format toolbar (only for text blocks, not image/hr)
+                    if (block.type !== 'image' && block.type !== 'hr') {
+                        const formatToolbar = document.createElement('div');
+                        formatToolbar.className = 'format-toolbar';
+                        formatToolbar.innerHTML = `
+            <button class="format-btn" data-format="bold" title="Bold (Ctrl+B)"><b>B</b></button>
+            <button class="format-btn" data-format="italic" title="Italic (Ctrl+I)"><i>I</i></button>
+            <button class="format-btn" data-format="underline" title="Underline (Ctrl+U)"><u>U</u></button>
+            <button class="format-btn highlight-btn" data-format="highlight" title="Highlight">A</button>
+          `;
+
+                        // handle format button clicks
+                        formatToolbar.querySelectorAll('.format-btn').forEach(btn => {
+                            btn.addEventListener('mousedown', (e) => {
+                                e.preventDefault(); // prevent losing selection
+                                const format = btn.dataset.format;
+
+                                if (format === 'highlight') {
+                                    // check if already highlighted and toggle
+                                    const selection = window.getSelection();
+                                    if (selection.rangeCount > 0) {
+                                        const range = selection.getRangeAt(0);
+                                        const container = range.commonAncestorContainer;
+                                        const element = container.nodeType === 3 ? container.parentElement : container;
+
+                                        // check if current selection has highlight
+                                        const currentColor = window.getComputedStyle(element).backgroundColor;
+                                        const isHighlighted = element.style.backgroundColor === 'rgb(254, 240, 138)' ||
+                                            element.style.backgroundColor === '#fef08a' ||
+                                            currentColor === 'rgb(254, 240, 138)';
+
+                                        if (isHighlighted) {
+                                            // remove highlight
+                                            document.execCommand('removeFormat', false, null);
+                                            document.execCommand('backColor', false, 'transparent');
+                                        } else {
+                                            // add highlight
+                                            document.execCommand('backColor', false, '#fef08a');
+                                        }
+                                    }
+                                } else {
+                                    document.execCommand(format, false, null);
+                                }
+
+                                block.text = htmlToText(el.innerHTML);
+                            });
+                        });
+
+                        wrap.appendChild(formatToolbar);
+                    }
+
                     blocksEl.appendChild(wrap);
                 });
 
@@ -640,15 +782,21 @@
                 blocksEl.appendChild(insertZoneEnd);
             }
 
-            // convert plain text with \n to html with <br>, escaping html chars
+            // convert plain text with \n to html with <br>, preserving formatting tags
             function textToHtml(text) {
-                return (text || '')
+                if (!text) return '';
+                // if text already contains formatting tags, use it as-is with just newline conversion
+                if (/<[^>]+>/.test(text)) {
+                    return text.replace(/\n/g, '<br>');
+                }
+                // otherwise escape and convert
+                return text
                     .replace(/&/g, '&amp;')
                     .replace(/</g, '&lt;')
                     .replace(/>/g, '&gt;')
                     .replace(/\n/g, '<br>');
             }
-            // convert contenteditable html back to plain text with \n
+            // convert contenteditable html back to text, preserving formatting tags
             function htmlToText(html) {
                 return html
                     .replace(/<div><br><\/div>/gi, '\n')
@@ -656,7 +804,8 @@
                     .replace(/<\/div>/gi, '')
                     .replace(/<br\s*\/?>/gi, '\n')
                     .replace(/&nbsp;/g, ' ')
-                    .replace(/&lt;/g, '<')
+                    // preserve formatting tags, only unescape non-tag content
+                    .replace(/&lt;(?![biu/]|strong|em|span)/g, '<')
                     .replace(/&gt;/g, '>')
                     .replace(/&amp;/g, '&');
             }
@@ -907,6 +1056,25 @@
                 // when the slash menu is open, it owns all input — prevent the block from receiving anything
                 if (slashMenuOpen) {
                     e.preventDefault();
+                    return;
+                }
+                // formatting shortcuts
+                if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
+                    e.preventDefault();
+                    document.execCommand('bold');
+                    state.blocks[i].text = htmlToText(el.innerHTML);
+                    return;
+                }
+                if ((e.ctrlKey || e.metaKey) && e.key === 'i') {
+                    e.preventDefault();
+                    document.execCommand('italic');
+                    state.blocks[i].text = htmlToText(el.innerHTML);
+                    return;
+                }
+                if ((e.ctrlKey || e.metaKey) && e.key === 'u') {
+                    e.preventDefault();
+                    document.execCommand('underline');
+                    state.blocks[i].text = htmlToText(el.innerHTML);
                     return;
                 }
                 // ctrl+enter creates a new paragraph block below
@@ -1167,6 +1335,29 @@
             }
 
             // ---------- serialize blocks → markdown ----------
+            function htmlToMarkdown(html) {
+                if (!html) return '';
+                return html
+                    // convert formatting tags to markdown
+                    .replace(/<b>(.*?)<\/b>/gi, '**$1**')
+                    .replace(/<strong>(.*?)<\/strong>/gi, '**$1**')
+                    .replace(/<i>(.*?)<\/i>/gi, '*$1*')
+                    .replace(/<em>(.*?)<\/em>/gi, '*$1*')
+                    .replace(/<u>(.*?)<\/u>/gi, '<u>$1</u>') // markdown doesn't have underline, keep HTML
+                    // convert highlights - use == syntax for markdown
+                    .replace(/<span[^>]*background-color:\s*(?:rgb\(254,\s*240,\s*138\)|#fef08a)[^>]*>(.*?)<\/span>/gi, '==$1==')
+                    .replace(/<span[^>]*background-color:\s*[^>]*>(.*?)<\/span>/gi, '==$1==')
+                    // clean up line breaks
+                    .replace(/<br\s*\/?>/gi, '\n')
+                    // remove any remaining tags
+                    .replace(/<[^>]+>/g, '')
+                    // decode entities
+                    .replace(/&nbsp;/g, ' ')
+                    .replace(/&lt;/g, '<')
+                    .replace(/&gt;/g, '>')
+                    .replace(/&amp;/g, '&');
+            }
+
             function serialize() {
                 const out = [];
                 let i = 0;
@@ -1174,16 +1365,16 @@
                     const block = state.blocks[i];
                     switch (block.type) {
                         case 'h2':
-                            out.push(`## ${block.text}`);
+                            out.push(`## ${htmlToMarkdown(block.text)}`);
                             i++;
                             break;
                         case 'h3':
-                            out.push(`### ${block.text}`);
+                            out.push(`### ${htmlToMarkdown(block.text)}`);
                             i++;
                             break;
                         case 'quote':
                             // each line of the block becomes its own > line
-                            out.push(block.text.split('\n').map(l => `> ${l}`).join('\n'));
+                            out.push(htmlToMarkdown(block.text).split('\n').map(l => `> ${l}`).join('\n'));
                             i++;
                             break;
                         case 'code':
@@ -1207,14 +1398,14 @@
                             // group consecutive list blocks into one markdown list
                             const items = [];
                             while (i < state.blocks.length && state.blocks[i].type === 'list') {
-                                items.push(`- ${state.blocks[i].text}`);
+                                items.push(`- ${htmlToMarkdown(state.blocks[i].text)}`);
                                 i++;
                             }
                             out.push(items.join('\n'));
                             break;
                         case 'paragraph':
                         default:
-                            out.push(block.text);
+                            out.push(htmlToMarkdown(block.text));
                             i++;
                     }
                 }
