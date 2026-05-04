@@ -537,6 +537,24 @@
             font-size: 1rem;
         }
 
+        #post-search {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 0.5rem 0.75rem;
+            margin-bottom: 0.5rem;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-size: 0.9rem;
+            font-family: inherit;
+            background: var(--bg);
+            color: var(--text);
+            outline: none;
+        }
+
+        #post-search:focus {
+            border-color: var(--accent, #2563eb);
+        }
+
         .post-item {
             padding: 0.55rem 0.75rem;
             border-radius: 6px;
@@ -669,6 +687,7 @@
     <div class="modal-overlay" id="post-picker">
         <div class="modal">
             <h3>load post</h3>
+            <input type="text" id="post-search" placeholder="search filename..." autocomplete="off" />
             <div id="post-list"></div>
             <div class="modal-close">
                 <button class="btn" id="post-picker-close">cancel</button>
@@ -1796,6 +1815,8 @@
             const postPicker = document.getElementById('post-picker');
             const postList = document.getElementById('post-list');
             const postPickerClose = document.getElementById('post-picker-close');
+            const postSearch = document.getElementById('post-search');
+            let allPosts = [];
 
             function openDB() {
                 return new Promise((res, rej) => {
@@ -1943,6 +1964,7 @@
                     return;
                 }
                 postList.innerHTML = '';
+                postSearch.value = '';
                 try {
                     const postsDir = await repoHandle.getDirectoryHandle('_posts', { create: false });
                     const files = [];
@@ -1952,22 +1974,39 @@
                         }
                     }
                     files.sort((a, b) => b.name.localeCompare(a.name));
-                    if (files.length === 0) {
-                        postList.innerHTML = '<div style="color:var(--muted);font-size:0.85rem;">no posts found in _posts/</div>';
-                    } else {
-                        files.forEach(entry => {
-                            const item = document.createElement('div');
-                            item.className = 'post-item';
-                            item.textContent = entry.name;
-                            item.onclick = () => loadPost(entry);
-                            postList.appendChild(item);
-                        });
-                    }
+                    allPosts = files;
+                    renderPostList('');
                     postPicker.classList.add('show');
+                    postSearch.focus();
                 } catch (err) {
                     showToast('failed to list posts: ' + err.message, true);
                 }
             }
+
+            function renderPostList(query) {
+                const q = query.trim().toLowerCase();
+                const filtered = q
+                    ? allPosts.filter(e => e.name.toLowerCase().includes(q))
+                    : allPosts;
+                postList.innerHTML = '';
+                if (allPosts.length === 0) {
+                    postList.innerHTML = '<div style="color:var(--muted);font-size:0.85rem;">no posts found in _posts/</div>';
+                    return;
+                }
+                if (filtered.length === 0) {
+                    postList.innerHTML = '<div style="color:var(--muted);font-size:0.85rem;">no matches</div>';
+                    return;
+                }
+                filtered.forEach(entry => {
+                    const item = document.createElement('div');
+                    item.className = 'post-item';
+                    item.textContent = entry.name;
+                    item.onclick = () => loadPost(entry);
+                    postList.appendChild(item);
+                });
+            }
+
+            postSearch.addEventListener('input', () => renderPostList(postSearch.value));
 
             async function loadPost(fileHandle) {
                 try {
