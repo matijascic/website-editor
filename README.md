@@ -1,5 +1,5 @@
-# My website editor
+# My Jekyll blog editor
 
-Moving my website md editor here because this project could potentially grow complex.
+Moving my website md blog editor here because this project could potentially grow complex.
 
 !!!! This project is vibecoded and barely works, you should not trust it!
