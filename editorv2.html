@@ -336,30 +336,50 @@
         }
 
         /* + button between blocks */
-        .insert-btn {
-            position: absolute;
-            left: 0.25rem;
-            top: 0.55rem;
-            width: 22px;
-            height: 22px;
-            border: none;
-            background: transparent;
-            color: var(--border-strong);
+        .insert-zone {
+            position: relative;
+            height: 8px;
+            margin: 2px 0;
             cursor: pointer;
-            font-size: 1.1rem;
-            line-height: 1;
-            border-radius: 4px;
-            opacity: 0;
-            transition: opacity 0.1s;
         }
 
-        .block-wrap:hover .insert-btn {
+        .insert-zone:hover {
+            background: linear-gradient(to right, transparent, var(--border) 20%, var(--border) 80%, transparent);
+            background-size: 100% 1px;
+            background-position: center;
+            background-repeat: no-repeat;
+        }
+
+        .insert-zone-btn {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+            width: 20px;
+            height: 20px;
+            border: 1px solid var(--border);
+            background: var(--surface);
+            color: var(--muted);
+            cursor: pointer;
+            font-size: 0.95rem;
+            line-height: 1;
+            border-radius: 50%;
+            opacity: 0;
+            transition: all 0.15s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .insert-zone:hover .insert-zone-btn {
             opacity: 1;
         }
 
-        .insert-btn:hover {
-            background: var(--bg);
-            color: var(--text);
+        .insert-zone-btn:hover {
+            background: var(--accent);
+            color: white;
+            border-color: var(--accent);
+            transform: translate(-50%, -50%) scale(1.1);
         }
 
         /* slash menu */
@@ -531,17 +551,24 @@
             function render() {
                 blocksEl.innerHTML = '';
                 state.blocks.forEach((block, i) => {
+                    // insert zone before each block
+                    const insertZone = document.createElement('div');
+                    insertZone.className = 'insert-zone';
+                    const insertZoneBtn = document.createElement('button');
+                    insertZoneBtn.className = 'insert-zone-btn';
+                    insertZoneBtn.textContent = '+';
+                    insertZoneBtn.title = 'insert block here';
+                    insertZoneBtn.onclick = (e) => {
+                        e.stopPropagation();
+                        insertBlockBefore(i);
+                    };
+                    insertZone.onclick = () => insertBlockBefore(i);
+                    insertZone.appendChild(insertZoneBtn);
+                    blocksEl.appendChild(insertZone);
+
                     const wrap = document.createElement('div');
                     wrap.className = 'block-wrap';
                     wrap.dataset.id = block.id;
-
-                    // + button
-                    const insertBtn = document.createElement('button');
-                    insertBtn.className = 'insert-btn';
-                    insertBtn.textContent = '+';
-                    insertBtn.title = 'insert block below';
-                    insertBtn.onclick = () => insertBlockAfter(i);
-                    wrap.appendChild(insertBtn);
 
                     // the block content — image and hr are special, everything else is contenteditable
                     let el;
@@ -580,6 +607,21 @@
 
                     blocksEl.appendChild(wrap);
                 });
+
+                // insert zone at the end
+                const insertZoneEnd = document.createElement('div');
+                insertZoneEnd.className = 'insert-zone';
+                const insertZoneBtnEnd = document.createElement('button');
+                insertZoneBtnEnd.className = 'insert-zone-btn';
+                insertZoneBtnEnd.textContent = '+';
+                insertZoneBtnEnd.title = 'insert block at end';
+                insertZoneBtnEnd.onclick = (e) => {
+                    e.stopPropagation();
+                    insertBlockAfter(state.blocks.length - 1);
+                };
+                insertZoneEnd.onclick = () => insertBlockAfter(state.blocks.length - 1);
+                insertZoneEnd.appendChild(insertZoneBtnEnd);
+                blocksEl.appendChild(insertZoneEnd);
             }
 
             // convert plain text with \n to html with <br>, escaping html chars
@@ -622,6 +664,17 @@
                     title.contentEditable = 'true';
                     title.textContent = block.title || '';
                     title.addEventListener('input', () => { block.title = title.textContent; });
+                    title.addEventListener('keydown', (e) => {
+                        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                            e.preventDefault();
+                            if (i < state.blocks.length - 1) {
+                                focusBlock(state.blocks[i + 1].id, 'start');
+                            } else {
+                                // create new block if at the end
+                                insertBlockAfter(i);
+                            }
+                        }
+                    });
                     inner.appendChild(title);
                 } else {
                     const prompt = document.createElement('div');
@@ -692,9 +745,13 @@
                             showToast('connect repo to save image to assets/images/', true);
                         }
 
-                        // insert new paragraph block after image
+                        // focus on title for editing
                         if (idx !== -1) {
-                            insertBlockAfter(idx);
+                            const wrap = blocksEl.querySelector(`[data-id="${block.id}"]`);
+                            const titleEl = wrap?.querySelector('.image-title');
+                            if (titleEl) {
+                                titleEl.focus();
+                            }
                         }
                     };
                     reader.readAsDataURL(file);
@@ -717,9 +774,13 @@
                 block.title = '';
                 const idx = state.blocks.indexOf(block);
                 render();
-                // insert new paragraph block after image
+                // focus on title for editing
                 if (idx !== -1) {
-                    insertBlockAfter(idx);
+                    const wrap = blocksEl.querySelector(`[data-id="${block.id}"]`);
+                    const titleEl = wrap?.querySelector('.image-title');
+                    if (titleEl) {
+                        titleEl.focus();
+                    }
                 }
             }
 
@@ -727,6 +788,13 @@
             function insertBlockAfter(i, type = 'paragraph') {
                 const newBlock = { id: nid(), type, text: '' };
                 state.blocks.splice(i + 1, 0, newBlock);
+                render();
+                focusBlock(newBlock.id);
+            }
+
+            function insertBlockBefore(i, type = 'paragraph') {
+                const newBlock = { id: nid(), type, text: '' };
+                state.blocks.splice(i, 0, newBlock);
                 render();
                 focusBlock(newBlock.id);
             }
@@ -835,17 +903,6 @@
                 if (e.key === 'Backspace' && el.textContent === '') {
                     e.preventDefault();
                     deleteBlock(i);
-                    return;
-                }
-                // arrow up/down navigate between blocks (when at edge)
-                if (e.key === 'ArrowUp' && i > 0 && isAtFirstLine(el)) {
-                    e.preventDefault();
-                    focusBlock(state.blocks[i - 1].id, 'end');
-                    return;
-                }
-                if (e.key === 'ArrowDown' && i < state.blocks.length - 1 && isAtLastLine(el)) {
-                    e.preventDefault();
-                    focusBlock(state.blocks[i + 1].id, 'end');
                     return;
                 }
                 // tab inserts spaces instead of moving focus
