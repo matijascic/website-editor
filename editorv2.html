@@ -574,10 +574,26 @@
                     let el;
                     if (block.type === 'image') {
                         el = renderImageBlock(block, i);
+                        // add keyboard handler for backspace to delete
+                        el.addEventListener('keydown', (e) => {
+                            if (e.key === 'Backspace') {
+                                e.preventDefault();
+                                deleteBlock(i);
+                            }
+                        });
+                        el.tabIndex = 0; // make it focusable
                     } else if (block.type === 'hr') {
                         el = document.createElement('div');
                         el.className = 'block hr';
                         el.innerHTML = '<hr>';
+                        // add keyboard handler for backspace to delete
+                        el.addEventListener('keydown', (e) => {
+                            if (e.key === 'Backspace') {
+                                e.preventDefault();
+                                deleteBlock(i);
+                            }
+                        });
+                        el.tabIndex = 0; // make it focusable
                     } else {
                         el = document.createElement('div');
                         el.className = `block ${block.type !== 'paragraph' ? block.type : ''}`;
@@ -672,6 +688,16 @@
                             } else {
                                 // create new block if at the end
                                 insertBlockAfter(i);
+                            }
+                        }
+                        if (e.key === 'Backspace') {
+                            // if title is empty, delete the whole image block
+                            if (title.textContent === '') {
+                                e.preventDefault();
+                                deleteBlock(i);
+                            } else {
+                                // otherwise stop propagation so parent doesn't handle it
+                                e.stopPropagation();
                             }
                         }
                     });
@@ -804,6 +830,10 @@
                     // don't allow zero blocks; just clear it
                     state.blocks[0].text = '';
                     state.blocks[0].type = 'paragraph';
+                    // clear any image-specific fields
+                    delete state.blocks[0].src;
+                    delete state.blocks[0].alt;
+                    delete state.blocks[0].title;
                     render();
                     focusBlock(state.blocks[0].id);
                     return;
