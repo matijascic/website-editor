@@ -6,4 +6,8 @@ My goal was to have a simple md editor that i could ise to automate jekyll layou
 
 Jupyter Notebook style was the inspiration behind this project.
 
+The editor looks for the jekyll repository root, and then adds the posts
+under _posts/ and the images under assets/images
+
+
 !!!! This project is vibecoded and barely works, you should not trust it!
